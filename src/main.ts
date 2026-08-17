@@ -3,10 +3,20 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { loadConfig } from './config.js';
-import { callApi, parameterizeEndpoint } from './api.js';
+import { callApi, parameterizeEndpoint, type TokenStore } from './api.js';
 import type { Environment } from './config.js';
 
 const config = loadConfig();
+
+// ─── Token store: env name → active bearer token (in-memory only) ─────────────
+const tokenStore: TokenStore = new Map<string, string>();
+
+// Seed the token store from config for any environments that already have a token
+for (const env of config.environments) {
+  if (env.auth.type === 'bearer' && env.auth.token) {
+    tokenStore.set(env.name, env.auth.token);
+  }
+}
 
 let currentEnvironmentName: string =
   config.defaultEnvironment ?? config.environments[0].name;
@@ -57,7 +67,12 @@ registerTool(
   async () => ({
     content: [{
       type: 'text' as const,
-      text: JSON.stringify(config.environments.map((e) => ({ name: e.name, baseUrl: e.baseUrl, authType: e.auth.type }))),
+      text: JSON.stringify(config.environments.map((e) => ({
+        name: e.name,
+        baseUrl: e.baseUrl,
+        authType: e.auth.type,
+        hasToken: e.auth.type === 'bearer' ? tokenStore.has(e.name) : undefined,
+      }))),
     }],
   }),
 );
@@ -85,7 +100,12 @@ registerTool(
     return {
       content: [{
         type: 'text' as const,
-        text: JSON.stringify({ name: env.name, baseUrl: env.baseUrl, authType: env.auth.type }),
+        text: JSON.stringify({
+          name: env.name,
+          baseUrl: env.baseUrl,
+          authType: env.auth.type,
+          hasToken: env.auth.type === 'bearer' ? tokenStore.has(env.name) : undefined,
+        }),
       }],
     };
   },
@@ -93,24 +113,56 @@ registerTool(
 
 // ─── General ─────────────────────────────────────────────────────────────────
 
+registerTool(
+  'set_bearer_token',
+  'Set or refresh the bearer token for an AKHQ environment. Use this when a request fails with an expired/unauthorized token error.',
+  {
+    environment: z.string().describe('The environment name to set the token for'),
+    token: z.string().describe('The new bearer token'),
+  },
+  async ({ environment, token }: { environment: string; token: string }) => {
+    const found = config.environments.find((e) => e.name === environment);
+    if (!found) {
+      return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Environment not found: ' + environment }) }] };
+    }
+    if (found.auth.type !== 'bearer') {
+      return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Environment "' + environment + '" does not use bearer authentication.' }) }] };
+    }
+    tokenStore.set(environment, token);
+    return { content: [{ type: 'text' as const, text: JSON.stringify({ success: true, environment }) }] };
+  },
+);
+
+registerTool(
+  'clear_bearer_token',
+  'Clear the stored bearer token for an AKHQ environment. The next API call will fail with an auth error prompting for a new token.',
+  {
+    environment: z.string().describe('The environment name whose token should be cleared'),
+  },
+  async ({ environment }: { environment: string }) => {
+    tokenStore.delete(environment);
+    return { content: [{ type: 'text' as const, text: JSON.stringify({ success: true, environment, message: 'Token cleared. Call set_bearer_token to provide a new one.' }) }] };
+  },
+);
+
 registerTool('get_auths', 'Get all auth details for current instance', {}, async () => {
   const endpoint = parameterizeEndpoint('/api/auths', {});
-  return callApi(getEnvironment(), endpoint, 'GET');
+  return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
 });
 
 registerTool('get_cluster', 'Get all cluster info for current instance', {}, async () => {
   const endpoint = parameterizeEndpoint('/api/cluster', {});
-  return callApi(getEnvironment(), endpoint, 'GET');
+  return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
 });
 
 registerTool('get_me', 'Get current user info', {}, async () => {
   const endpoint = parameterizeEndpoint('/api/me', {});
-  return callApi(getEnvironment(), endpoint, 'GET');
+  return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
 });
 
 registerTool('get_topic_defaults_configs', 'Get default topic configuration', {}, async () => {
   const endpoint = parameterizeEndpoint('/api/topic/defaults-configs', {});
-  return callApi(getEnvironment(), endpoint, 'GET');
+  return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
 });
 
 // ─── ACLs ─────────────────────────────────────────────────────────────────────
@@ -124,7 +176,7 @@ registerTool(
   },
   async (params: { cluster: string; search?: string | null }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/acls', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -138,7 +190,7 @@ registerTool(
   },
   async (params: { cluster: string; principal: string; resourceType?: string | null }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/acls/{principal}', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -158,7 +210,7 @@ registerTool(
   },
   async (params: Record<string, unknown>) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/topic', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -175,7 +227,7 @@ registerTool(
   async (params: { cluster: string; name: string; partition?: number; replication?: number; configs?: Record<string, string> }) => {
     const { cluster, ...body } = params;
     const endpoint = parameterizeEndpoint('/api/{cluster}/topic', { cluster });
-    return callApi(getEnvironment(), endpoint, 'POST', body);
+    return callApi(getEnvironment(), tokenStore, endpoint, 'POST', body);
   },
 );
 
@@ -188,7 +240,7 @@ registerTool(
   },
   async (params: { cluster: string; topicName: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/topic/{topicName}', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -201,7 +253,7 @@ registerTool(
   },
   async (params: { cluster: string; topicName: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/topic/{topicName}', params);
-    return callApi(getEnvironment(), endpoint, 'DELETE');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'DELETE');
   },
 );
 
@@ -214,7 +266,7 @@ registerTool(
   },
   async (params: { cluster: string; topicName: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/topic/{topicName}/configs', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -229,7 +281,7 @@ registerTool(
   async (params: { cluster: string; topicName: string; configs: Array<{ name: string; value: string }> }) => {
     const { cluster, topicName, configs } = params;
     const endpoint = parameterizeEndpoint('/api/{cluster}/topic/{topicName}/configs', { cluster, topicName });
-    return callApi(getEnvironment(), endpoint, 'POST', configs);
+    return callApi(getEnvironment(), tokenStore, endpoint, 'POST', configs);
   },
 );
 
@@ -249,7 +301,7 @@ registerTool(
   },
   async (params: Record<string, unknown>) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/topic/{topicName}/logs', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -267,7 +319,7 @@ registerTool(
   async (params: { cluster: string; topicName: string; value: string; key?: string | null; partition?: number | null; headers?: Record<string, string> | null }) => {
     const { cluster, topicName, ...body } = params;
     const endpoint = parameterizeEndpoint('/api/{cluster}/topic/{topicName}/produce', { cluster, topicName });
-    return callApi(getEnvironment(), endpoint, 'POST', body);
+    return callApi(getEnvironment(), tokenStore, endpoint, 'POST', body);
   },
 );
 
@@ -283,7 +335,7 @@ registerTool(
   async (params: { cluster: string; topicName: string; offset: number; partition: number }) => {
     const { cluster, topicName, offset, partition } = params;
     const endpoint = parameterizeEndpoint('/api/{cluster}/topic/{topicName}/deleteRecords', { cluster, topicName });
-    return callApi(getEnvironment(), endpoint, 'DELETE', { offset, partition });
+    return callApi(getEnvironment(), tokenStore, endpoint, 'DELETE', { offset, partition });
   },
 );
 
@@ -296,7 +348,7 @@ registerTool(
   },
   async (params: { cluster: string; topicName: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/topic/{topicName}/acls', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -313,7 +365,7 @@ registerTool(
   },
   async (params: Record<string, unknown>) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/group', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -326,7 +378,7 @@ registerTool(
   },
   async (params: { cluster: string; groupName: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/group/{groupName}', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -339,7 +391,7 @@ registerTool(
   },
   async (params: { cluster: string; groupName: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/group/{groupName}', params);
-    return callApi(getEnvironment(), endpoint, 'DELETE');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'DELETE');
   },
 );
 
@@ -352,7 +404,7 @@ registerTool(
   },
   async (params: { cluster: string; groupName: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/group/{groupName}/offsets', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -371,7 +423,7 @@ registerTool(
   async (params: { cluster: string; groupName: string; offsets: Array<{ topic: string; partition: number; offset: number }> }) => {
     const { cluster, groupName, offsets } = params;
     const endpoint = parameterizeEndpoint('/api/{cluster}/group/{groupName}/offsets', { cluster, groupName });
-    return callApi(getEnvironment(), endpoint, 'POST', offsets);
+    return callApi(getEnvironment(), tokenStore, endpoint, 'POST', offsets);
   },
 );
 
@@ -384,7 +436,7 @@ registerTool(
   },
   async (params: { cluster: string; groupName: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/group/{groupName}/acls', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -397,7 +449,7 @@ registerTool(
   },
   async (params: { cluster: string; groupName: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/group/{groupName}/members', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -410,7 +462,7 @@ registerTool(
   },
   async (params: { cluster: string; groupName: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/group/{groupName}/topics', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -427,7 +479,7 @@ registerTool(
   },
   async (params: Record<string, unknown>) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/schema', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -443,7 +495,7 @@ registerTool(
   async (params: { cluster: string; subject: string; schema: string; schemaType?: string }) => {
     const { cluster, ...body } = params;
     const endpoint = parameterizeEndpoint('/api/{cluster}/schema', { cluster });
-    return callApi(getEnvironment(), endpoint, 'POST', body);
+    return callApi(getEnvironment(), tokenStore, endpoint, 'POST', body);
   },
 );
 
@@ -456,7 +508,7 @@ registerTool(
   },
   async (params: { cluster: string; subject: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/schema/{subject}', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -469,7 +521,7 @@ registerTool(
   },
   async (params: { cluster: string; subject: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/schema/{subject}', params);
-    return callApi(getEnvironment(), endpoint, 'DELETE');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'DELETE');
   },
 );
 
@@ -482,7 +534,7 @@ registerTool(
   },
   async (params: { cluster: string; subject: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/schema/{subject}/version', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -496,7 +548,7 @@ registerTool(
   },
   async (params: { cluster: string; subject: string; version: number }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/schema/{subject}/version/{version}', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -510,7 +562,7 @@ registerTool(
   },
   async (params: { cluster: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/node', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -523,7 +575,7 @@ registerTool(
   },
   async (params: { cluster: string; nodeId: number }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/node/{nodeId}', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -536,7 +588,7 @@ registerTool(
   },
   async (params: { cluster: string; nodeId: number }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/node/{nodeId}/configs', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -551,7 +603,7 @@ registerTool(
   async (params: { cluster: string; nodeId: number; configs: Array<{ name: string; value: string }> }) => {
     const { cluster, nodeId, configs } = params;
     const endpoint = parameterizeEndpoint('/api/{cluster}/node/{nodeId}/configs', { cluster, nodeId });
-    return callApi(getEnvironment(), endpoint, 'POST', configs);
+    return callApi(getEnvironment(), tokenStore, endpoint, 'POST', configs);
   },
 );
 
@@ -564,7 +616,7 @@ registerTool(
   },
   async (params: { cluster: string; nodeId: number }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/node/{nodeId}/logs', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -582,7 +634,7 @@ registerTool(
   },
   async (params: Record<string, unknown>) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/connect/{connectId}', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -598,7 +650,7 @@ registerTool(
   async (params: { cluster: string; connectId: string; name: string; configs: Record<string, string> }) => {
     const { cluster, connectId, ...body } = params;
     const endpoint = parameterizeEndpoint('/api/{cluster}/connect/{connectId}', { cluster, connectId });
-    return callApi(getEnvironment(), endpoint, 'POST', body);
+    return callApi(getEnvironment(), tokenStore, endpoint, 'POST', body);
   },
 );
 
@@ -612,7 +664,7 @@ registerTool(
   },
   async (params: { cluster: string; connectId: string; name: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/connect/{connectId}/{name}', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -626,7 +678,7 @@ registerTool(
   },
   async (params: { cluster: string; connectId: string; name: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/connect/{connectId}/{name}', params);
-    return callApi(getEnvironment(), endpoint, 'DELETE');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'DELETE');
   },
 );
 
@@ -640,7 +692,7 @@ registerTool(
   },
   async (params: { cluster: string; connectId: string; name: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/connect/{connectId}/{name}/configs', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -656,7 +708,7 @@ registerTool(
   async (params: { cluster: string; connectId: string; name: string; configs: Record<string, string> }) => {
     const { cluster, connectId, name, configs } = params;
     const endpoint = parameterizeEndpoint('/api/{cluster}/connect/{connectId}/{name}/configs', { cluster, connectId, name });
-    return callApi(getEnvironment(), endpoint, 'POST', configs);
+    return callApi(getEnvironment(), tokenStore, endpoint, 'POST', configs);
   },
 );
 
@@ -670,7 +722,7 @@ registerTool(
   },
   async (params: { cluster: string; connectId: string; name: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/connect/{connectId}/{name}/pause', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -684,7 +736,7 @@ registerTool(
   },
   async (params: { cluster: string; connectId: string; name: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/connect/{connectId}/{name}/resume', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -698,7 +750,7 @@ registerTool(
   },
   async (params: { cluster: string; connectId: string; name: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/connect/{connectId}/{name}/restart', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -712,7 +764,7 @@ registerTool(
   },
   async (params: { cluster: string; connectId: string; name: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/connect/{connectId}/{name}/tasks', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -727,7 +779,7 @@ registerTool(
   },
   async (params: { cluster: string; connectId: string; name: string; taskId: number }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/connect/{connectId}/{name}/tasks/{taskId}/restart', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -740,7 +792,7 @@ registerTool(
   },
   async (params: { cluster: string; connectId: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/connect/{connectId}/plugins', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -755,7 +807,7 @@ registerTool(
   },
   async (params: { cluster: string; ksqldb: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/ksqldb/{ksqldb}/info', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -768,7 +820,7 @@ registerTool(
   },
   async (params: { cluster: string; ksqldb: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/ksqldb/{ksqldb}/queries', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -781,7 +833,7 @@ registerTool(
   },
   async (params: { cluster: string; ksqldb: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/ksqldb/{ksqldb}/streams', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -794,7 +846,7 @@ registerTool(
   },
   async (params: { cluster: string; ksqldb: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/ksqldb/{ksqldb}/tables', params);
-    return callApi(getEnvironment(), endpoint, 'GET');
+    return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
   },
 );
 
@@ -810,7 +862,7 @@ registerTool(
   async (params: { cluster: string; ksqldb: string; ksql: string; streamsProperties?: Record<string, string> }) => {
     const { cluster, ksqldb, ...body } = params;
     const endpoint = parameterizeEndpoint('/api/{cluster}/ksqldb/{ksqldb}/execute', { cluster, ksqldb });
-    return callApi(getEnvironment(), endpoint, 'PUT', body);
+    return callApi(getEnvironment(), tokenStore, endpoint, 'PUT', body);
   },
 );
 
@@ -825,7 +877,7 @@ registerTool(
   async (params: { cluster: string; ksqldb: string; sql: string }) => {
     const { cluster, ksqldb, sql } = params;
     const endpoint = parameterizeEndpoint('/api/{cluster}/ksqldb/{ksqldb}/query', { cluster, ksqldb });
-    return callApi(getEnvironment(), endpoint, 'PUT', { sql });
+    return callApi(getEnvironment(), tokenStore, endpoint, 'PUT', { sql });
   },
 );
 

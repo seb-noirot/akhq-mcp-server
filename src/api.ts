@@ -1,13 +1,21 @@
 import type { Environment } from './config.js';
 
-export function buildAuthHeaders(env: Environment): Record<string, string> {
+/** In-memory store: environment name -> active bearer token. */
+export type TokenStore = Map<string, string>;
+
+export function buildAuthHeaders(
+  env: Environment,
+  tokenStore: TokenStore,
+): Record<string, string> {
   const { auth } = env;
   if (auth.type === 'basic') {
     const encoded = Buffer.from(auth.username + ':' + auth.password).toString('base64');
     return { Authorization: 'Basic ' + encoded };
   }
   if (auth.type === 'bearer') {
-    return { Authorization: 'Bearer ' + auth.token };
+    const token = tokenStore.get(env.name);
+    if (!token) return {};
+    return { Authorization: 'Bearer ' + token };
   }
   return {};
 }
@@ -45,13 +53,14 @@ export function parameterizeEndpoint(
 
 export async function callApi(
   env: Environment,
+  tokenStore: TokenStore,
   endpoint: string,
   method: string,
   body?: unknown,
   contentType?: string,
 ): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
   const headers: Record<string, string> = {
-    ...buildAuthHeaders(env),
+    ...buildAuthHeaders(env, tokenStore),
   };
   if (contentType) {
     headers['Content-Type'] = contentType;
@@ -71,6 +80,23 @@ export async function callApi(
     data = await response.json();
   } else {
     data = await response.text();
+  }
+
+  if (response.status === 401 || response.status === 403) {
+    if (env.auth.type === 'bearer') {
+      tokenStore.delete(env.name);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              error: '****** expired or unauthorized (HTTP ' + response.status + ')',
+              action_required: 'Call set_bearer_token with environment "' + env.name + '" and a fresh token to continue.',
+            }),
+          },
+        ],
+      };
+    }
   }
 
   if (!response.ok) {

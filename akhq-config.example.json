@@ -19,7 +19,14 @@
       "baseUrl": "https://akhq-prod.example.com",
       "auth": {
         "type": "bearer",
-        "token": "YOUR_TOKEN_HERE"
+        "token": "YOUR_INITIAL_TOKEN_HERE"
+      }
+    },
+    {
+      "name": "staging",
+      "baseUrl": "https://akhq-staging.example.com",
+      "auth": {
+        "type": "bearer"
       }
     }
   ],

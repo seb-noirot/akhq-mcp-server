@@ -12,7 +12,7 @@ export const AuthConfigSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('bearer'),
-    token: z.string(),
+    token: z.string().optional(),
   }),
 ]);
 
