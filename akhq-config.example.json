@@ -1,0 +1,27 @@
+{
+  "environments": [
+    {
+      "name": "local",
+      "baseUrl": "http://localhost:8080",
+      "auth": { "type": "none" }
+    },
+    {
+      "name": "dev",
+      "baseUrl": "https://akhq-dev.example.com",
+      "auth": {
+        "type": "basic",
+        "username": "admin",
+        "password": "changeme"
+      }
+    },
+    {
+      "name": "prod",
+      "baseUrl": "https://akhq-prod.example.com",
+      "auth": {
+        "type": "bearer",
+        "token": "YOUR_TOKEN_HERE"
+      }
+    }
+  ],
+  "defaultEnvironment": "local"
+}
