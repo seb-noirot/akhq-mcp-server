@@ -1,0 +1,34 @@
+{
+  "environments": [
+    {
+      "name": "local",
+      "baseUrl": "http://localhost:8080",
+      "auth": { "type": "none" }
+    },
+    {
+      "name": "dev",
+      "baseUrl": "https://akhq-dev.example.com",
+      "auth": {
+        "type": "basic",
+        "username": "admin",
+        "password": "changeme"
+      }
+    },
+    {
+      "name": "prod",
+      "baseUrl": "https://akhq-prod.example.com",
+      "auth": {
+        "type": "bearer",
+        "token": "YOUR_INITIAL_TOKEN_HERE"
+      }
+    },
+    {
+      "name": "staging",
+      "baseUrl": "https://akhq-staging.example.com",
+      "auth": {
+        "type": "bearer"
+      }
+    }
+  ],
+  "defaultEnvironment": "local"
+}
