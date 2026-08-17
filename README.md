@@ -126,10 +126,10 @@ Add to `.cursor/mcp.json` in your project or globally:
 {
   "mcpServers": {
     "akhq": {
-      "command": "node",
-      "args": ["/path/to/akhq-mcp-server/dist/main.js"],
+      "command": "npx",
+      "args": ["akhq-mcp-server"],
       "env": {
-        "AKHQ_BASE_URL": "http://localhost:8080"
+        "AKHQ_CONFIG_FILE": "/path/to/akhq-config.json"
       }
     }
   }
