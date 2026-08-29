@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 /**
- * Validates that every registerTool call in main.ts declares all four
- * MCP hint properties (readOnlyHint, destructiveHint, idempotentHint,
- * openWorldHint) with explicit boolean values.
+ * Validates that every registerTool call in main.ts:
+ *   1. Declares all four MCP hint properties (readOnlyHint, destructiveHint,
+ *      idempotentHint, openWorldHint) with explicit boolean values.
+ *   2. Declares an explicit input schema (the third argument to registerTool
+ *      must be present as an object literal, even an empty one `{}`).
  *
  * Exit code 0 = all tools are compliant.
- * Exit code 1 = one or more tools are missing hints.
+ * Exit code 1 = one or more tools are missing hints or a schema declaration.
  */
 
 import { readFileSync } from 'node:fs';
@@ -34,6 +36,17 @@ for (const block of toolBlocks) {
   const nameMatch = block.match(/registerTool\(\s*['"]([^'"]+)['"]/);
   const name = nameMatch ? nameMatch[1] : '<unknown>';
 
+  // ── Check 1: input schema declaration ────────────────────────────────────
+  // The third argument to registerTool must be an object literal (even `{}`).
+  // A missing or non-object third argument means no inputSchema is declared.
+  const schemaArgPattern =
+    /registerTool\(\s*['"][^'"]+['"]\s*,\s*['"][^'"]*['"]\s*,\s*(\{)/s;
+  if (!schemaArgPattern.test(block)) {
+    console.error(`FAIL [${name}]: missing input schema (third argument must be an object literal)`);
+    failures++;
+  }
+
+  // ── Check 2: hint constant ────────────────────────────────────────────────
   // Find which hint constant is used in this block
   const hintConstantMatch = block.match(/\b(\w+_HINTS)\b/);
   if (!hintConstantMatch) {
@@ -70,10 +83,10 @@ for (const block of toolBlocks) {
 
 if (failures === 0) {
   console.log(
-    `OK: all ${toolBlocks.length} tool(s) declare all four MCP hints with boolean values.`,
+    `OK: all ${toolBlocks.length} tool(s) declare an input schema and all four MCP hints with boolean values.`,
   );
   process.exit(0);
 } else {
-  console.error(`\n${failures} hint violation(s) found.`);
+  console.error(`\n${failures} violation(s) found.`);
   process.exit(1);
 }
