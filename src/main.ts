@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { loadConfig } from './config.js';
 import { callApi, parameterizeEndpoint, type TokenStore } from './api.js';
@@ -41,9 +42,10 @@ function registerTool<T extends Record<string, unknown>>(
   name: string,
   description: string,
   parameters: Record<string, z.ZodTypeAny>,
+  annotations: ToolAnnotations,
   handler: Handler<T>,
 ): void {
-  server.tool(name, description, parameters, async (params) => {
+  server.tool(name, description, parameters, annotations, async (params) => {
     try {
       return await handler(params as T);
     } catch (error) {
@@ -58,12 +60,64 @@ function registerTool<T extends Record<string, unknown>>(
   });
 }
 
-// ─── Environment Management ───────────────────────────────────────────────────
+// ─── Reusable hint presets ────────────────────────────────────────────────────
+
+const READ_ONLY_HINTS: ToolAnnotations = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true,
+};
+
+const READ_ONLY_LOCAL_HINTS: ToolAnnotations = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+};
+
+const WRITE_IDEMPOTENT_LOCAL_HINTS: ToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+};
+
+const WRITE_DESTRUCTIVE_LOCAL_HINTS: ToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: true,
+  openWorldHint: false,
+};
+
+const WRITE_CREATE_HINTS: ToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: true,
+};
+
+const WRITE_DELETE_HINTS: ToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: false,
+  openWorldHint: true,
+};
+
+const WRITE_UPDATE_HINTS: ToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true,
+};
+
 
 registerTool(
   'list_environments',
   'List all configured AKHQ environments',
   {},
+  READ_ONLY_LOCAL_HINTS,
+  
   async () => ({
     content: [{
       type: 'text' as const,
@@ -81,6 +135,8 @@ registerTool(
   'set_environment',
   'Switch the active AKHQ environment',
   { name: z.string().describe('The environment name to switch to') },
+  WRITE_IDEMPOTENT_LOCAL_HINTS,
+  
   async ({ name }: { name: string }) => {
     const found = config.environments.find((e) => e.name === name);
     if (!found) {
@@ -95,6 +151,8 @@ registerTool(
   'get_current_environment',
   'Get the currently active AKHQ environment',
   {},
+  READ_ONLY_LOCAL_HINTS,
+  
   async () => {
     const env = getEnvironment();
     return {
@@ -120,6 +178,8 @@ registerTool(
     environment: z.string().describe('The environment name to set the token for'),
     token: z.string().describe('The new bearer token'),
   },
+  WRITE_IDEMPOTENT_LOCAL_HINTS,
+  
   async ({ environment, token }: { environment: string; token: string }) => {
     const found = config.environments.find((e) => e.name === environment);
     if (!found) {
@@ -139,28 +199,30 @@ registerTool(
   {
     environment: z.string().describe('The environment name whose token should be cleared'),
   },
+  WRITE_DESTRUCTIVE_LOCAL_HINTS,
+  
   async ({ environment }: { environment: string }) => {
     tokenStore.delete(environment);
     return { content: [{ type: 'text' as const, text: JSON.stringify({ success: true, environment, message: 'Token cleared. Call set_bearer_token to provide a new one.' }) }] };
   },
 );
 
-registerTool('get_auths', 'Get all auth details for current instance', {}, async () => {
+registerTool('get_auths', 'Get all auth details for current instance', {}, READ_ONLY_HINTS,  async () => {
   const endpoint = parameterizeEndpoint('/api/auths', {});
   return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
 });
 
-registerTool('get_cluster', 'Get all cluster info for current instance', {}, async () => {
+registerTool('get_cluster', 'Get all cluster info for current instance', {}, READ_ONLY_HINTS,  async () => {
   const endpoint = parameterizeEndpoint('/api/cluster', {});
   return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
 });
 
-registerTool('get_me', 'Get current user info', {}, async () => {
+registerTool('get_me', 'Get current user info', {}, READ_ONLY_HINTS,  async () => {
   const endpoint = parameterizeEndpoint('/api/me', {});
   return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
 });
 
-registerTool('get_topic_defaults_configs', 'Get default topic configuration', {}, async () => {
+registerTool('get_topic_defaults_configs', 'Get default topic configuration', {}, READ_ONLY_HINTS,  async () => {
   const endpoint = parameterizeEndpoint('/api/topic/defaults-configs', {});
   return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
 });
@@ -174,6 +236,8 @@ registerTool(
     cluster: z.string().describe('Cluster name'),
     search: z.string().optional().nullable().describe('Optional search term'),
   },
+  READ_ONLY_HINTS,
+  
   async (params: { cluster: string; search?: string | null }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/acls', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -188,6 +252,8 @@ registerTool(
     principal: z.string().describe('Principal name'),
     resourceType: z.string().optional().nullable().describe('Resource type filter'),
   },
+  READ_ONLY_HINTS,
+  
   async (params: { cluster: string; principal: string; resourceType?: string | null }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/acls/{principal}', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -208,6 +274,8 @@ registerTool(
     sortField: z.string().optional().nullable(),
     sortOrder: z.string().optional().nullable(),
   },
+  READ_ONLY_HINTS,
+  
   async (params: Record<string, unknown>) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/topic', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -224,6 +292,8 @@ registerTool(
     replication: z.number().optional().describe('Replication factor'),
     configs: z.record(z.string(), z.string()).optional().describe('Topic configurations'),
   },
+  WRITE_CREATE_HINTS,
+  
   async (params: { cluster: string; name: string; partition?: number; replication?: number; configs?: Record<string, string> }) => {
     const { cluster, ...body } = params;
     const endpoint = parameterizeEndpoint('/api/{cluster}/topic', { cluster });
@@ -238,6 +308,8 @@ registerTool(
     cluster: z.string().describe('Cluster name'),
     topicName: z.string().describe('Topic name'),
   },
+  READ_ONLY_HINTS,
+  
   async (params: { cluster: string; topicName: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/topic/{topicName}', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -251,6 +323,8 @@ registerTool(
     cluster: z.string().describe('Cluster name'),
     topicName: z.string().describe('Topic name'),
   },
+  WRITE_DELETE_HINTS,
+  
   async (params: { cluster: string; topicName: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/topic/{topicName}', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'DELETE');
@@ -264,6 +338,7 @@ registerTool(
     cluster: z.string().describe('Cluster name'),
     topicName: z.string().describe('Topic name'),
   },
+  READ_ONLY_HINTS,
   async (params: { cluster: string; topicName: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/topic/{topicName}/configs', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -278,6 +353,8 @@ registerTool(
     topicName: z.string().describe('Topic name'),
     configs: z.array(z.object({ name: z.string(), value: z.string() })).describe('Configuration entries'),
   },
+  WRITE_CREATE_HINTS,
+  
   async (params: { cluster: string; topicName: string; configs: Array<{ name: string; value: string }> }) => {
     const { cluster, topicName, configs } = params;
     const endpoint = parameterizeEndpoint('/api/{cluster}/topic/{topicName}/configs', { cluster, topicName });
@@ -299,6 +376,7 @@ registerTool(
     page: z.number().optional().nullable(),
     perPage: z.number().optional().nullable(),
   },
+  READ_ONLY_HINTS,
   async (params: Record<string, unknown>) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/topic/{topicName}/logs', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -316,6 +394,7 @@ registerTool(
     partition: z.number().optional().nullable().describe('Target partition'),
     headers: z.record(z.string(), z.string()).optional().nullable().describe('Message headers'),
   },
+  WRITE_CREATE_HINTS,
   async (params: { cluster: string; topicName: string; value: string; key?: string | null; partition?: number | null; headers?: Record<string, string> | null }) => {
     const { cluster, topicName, ...body } = params;
     const endpoint = parameterizeEndpoint('/api/{cluster}/topic/{topicName}/produce', { cluster, topicName });
@@ -332,6 +411,7 @@ registerTool(
     offset: z.number().describe('Delete records up to this offset'),
     partition: z.number().describe('Partition number'),
   },
+  WRITE_DELETE_HINTS,
   async (params: { cluster: string; topicName: string; offset: number; partition: number }) => {
     const { cluster, topicName, offset, partition } = params;
     const endpoint = parameterizeEndpoint('/api/{cluster}/topic/{topicName}/deleteRecords', { cluster, topicName });
@@ -346,6 +426,7 @@ registerTool(
     cluster: z.string().describe('Cluster name'),
     topicName: z.string().describe('Topic name'),
   },
+  READ_ONLY_HINTS,
   async (params: { cluster: string; topicName: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/topic/{topicName}/acls', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -363,6 +444,7 @@ registerTool(
     page: z.number().optional().nullable(),
     perPage: z.number().optional().nullable(),
   },
+  READ_ONLY_HINTS,
   async (params: Record<string, unknown>) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/group', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -376,6 +458,7 @@ registerTool(
     cluster: z.string().describe('Cluster name'),
     groupName: z.string().describe('Consumer group name'),
   },
+  READ_ONLY_HINTS,
   async (params: { cluster: string; groupName: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/group/{groupName}', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -389,6 +472,7 @@ registerTool(
     cluster: z.string().describe('Cluster name'),
     groupName: z.string().describe('Consumer group name'),
   },
+  WRITE_DELETE_HINTS,
   async (params: { cluster: string; groupName: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/group/{groupName}', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'DELETE');
@@ -402,6 +486,7 @@ registerTool(
     cluster: z.string().describe('Cluster name'),
     groupName: z.string().describe('Consumer group name'),
   },
+  READ_ONLY_HINTS,
   async (params: { cluster: string; groupName: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/group/{groupName}/offsets', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -420,6 +505,7 @@ registerTool(
       offset: z.number(),
     })).describe('Offsets to set'),
   },
+  WRITE_CREATE_HINTS,
   async (params: { cluster: string; groupName: string; offsets: Array<{ topic: string; partition: number; offset: number }> }) => {
     const { cluster, groupName, offsets } = params;
     const endpoint = parameterizeEndpoint('/api/{cluster}/group/{groupName}/offsets', { cluster, groupName });
@@ -434,6 +520,7 @@ registerTool(
     cluster: z.string().describe('Cluster name'),
     groupName: z.string().describe('Consumer group name'),
   },
+  READ_ONLY_HINTS,
   async (params: { cluster: string; groupName: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/group/{groupName}/acls', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -447,6 +534,7 @@ registerTool(
     cluster: z.string().describe('Cluster name'),
     groupName: z.string().describe('Consumer group name'),
   },
+  READ_ONLY_HINTS,
   async (params: { cluster: string; groupName: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/group/{groupName}/members', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -460,6 +548,7 @@ registerTool(
     cluster: z.string().describe('Cluster name'),
     groupName: z.string().describe('Consumer group name'),
   },
+  READ_ONLY_HINTS,
   async (params: { cluster: string; groupName: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/group/{groupName}/topics', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -477,6 +566,7 @@ registerTool(
     page: z.number().optional().nullable(),
     perPage: z.number().optional().nullable(),
   },
+  READ_ONLY_HINTS,
   async (params: Record<string, unknown>) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/schema', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -492,6 +582,7 @@ registerTool(
     schema: z.string().describe('Schema definition (JSON string)'),
     schemaType: z.string().optional().describe('AVRO, JSON, PROTOBUF'),
   },
+  WRITE_CREATE_HINTS,
   async (params: { cluster: string; subject: string; schema: string; schemaType?: string }) => {
     const { cluster, ...body } = params;
     const endpoint = parameterizeEndpoint('/api/{cluster}/schema', { cluster });
@@ -506,6 +597,7 @@ registerTool(
     cluster: z.string().describe('Cluster name'),
     subject: z.string().describe('Schema subject'),
   },
+  READ_ONLY_HINTS,
   async (params: { cluster: string; subject: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/schema/{subject}', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -519,6 +611,7 @@ registerTool(
     cluster: z.string().describe('Cluster name'),
     subject: z.string().describe('Schema subject'),
   },
+  WRITE_DELETE_HINTS,
   async (params: { cluster: string; subject: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/schema/{subject}', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'DELETE');
@@ -532,6 +625,7 @@ registerTool(
     cluster: z.string().describe('Cluster name'),
     subject: z.string().describe('Schema subject'),
   },
+  READ_ONLY_HINTS,
   async (params: { cluster: string; subject: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/schema/{subject}/version', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -546,6 +640,7 @@ registerTool(
     subject: z.string().describe('Schema subject'),
     version: z.number().describe('Schema version'),
   },
+  READ_ONLY_HINTS,
   async (params: { cluster: string; subject: string; version: number }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/schema/{subject}/version/{version}', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -560,6 +655,8 @@ registerTool(
   {
     cluster: z.string().describe('Cluster name'),
   },
+  READ_ONLY_HINTS,
+  
   async (params: { cluster: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/node', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -573,6 +670,8 @@ registerTool(
     cluster: z.string().describe('Cluster name'),
     nodeId: z.number().describe('Node ID'),
   },
+  READ_ONLY_HINTS,
+  
   async (params: { cluster: string; nodeId: number }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/node/{nodeId}', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -586,6 +685,7 @@ registerTool(
     cluster: z.string().describe('Cluster name'),
     nodeId: z.number().describe('Node ID'),
   },
+  READ_ONLY_HINTS,
   async (params: { cluster: string; nodeId: number }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/node/{nodeId}/configs', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -600,6 +700,7 @@ registerTool(
     nodeId: z.number().describe('Node ID'),
     configs: z.array(z.object({ name: z.string(), value: z.string() })).describe('Configuration entries'),
   },
+  WRITE_CREATE_HINTS,
   async (params: { cluster: string; nodeId: number; configs: Array<{ name: string; value: string }> }) => {
     const { cluster, nodeId, configs } = params;
     const endpoint = parameterizeEndpoint('/api/{cluster}/node/{nodeId}/configs', { cluster, nodeId });
@@ -614,6 +715,7 @@ registerTool(
     cluster: z.string().describe('Cluster name'),
     nodeId: z.number().describe('Node ID'),
   },
+  READ_ONLY_HINTS,
   async (params: { cluster: string; nodeId: number }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/node/{nodeId}/logs', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -632,6 +734,8 @@ registerTool(
     page: z.number().optional().nullable(),
     perPage: z.number().optional().nullable(),
   },
+  READ_ONLY_HINTS,
+  
   async (params: Record<string, unknown>) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/connect/{connectId}', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -647,6 +751,8 @@ registerTool(
     name: z.string().describe('Connector name'),
     configs: z.record(z.string(), z.string()).describe('Connector configuration'),
   },
+  WRITE_CREATE_HINTS,
+  
   async (params: { cluster: string; connectId: string; name: string; configs: Record<string, string> }) => {
     const { cluster, connectId, ...body } = params;
     const endpoint = parameterizeEndpoint('/api/{cluster}/connect/{connectId}', { cluster, connectId });
@@ -662,6 +768,7 @@ registerTool(
     connectId: z.string().describe('Connect cluster ID'),
     name: z.string().describe('Connector name'),
   },
+  READ_ONLY_HINTS,
   async (params: { cluster: string; connectId: string; name: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/connect/{connectId}/{name}', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -676,6 +783,8 @@ registerTool(
     connectId: z.string().describe('Connect cluster ID'),
     name: z.string().describe('Connector name'),
   },
+  WRITE_DELETE_HINTS,
+  
   async (params: { cluster: string; connectId: string; name: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/connect/{connectId}/{name}', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'DELETE');
@@ -690,6 +799,7 @@ registerTool(
     connectId: z.string().describe('Connect cluster ID'),
     name: z.string().describe('Connector name'),
   },
+  READ_ONLY_HINTS,
   async (params: { cluster: string; connectId: string; name: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/connect/{connectId}/{name}/configs', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -705,6 +815,7 @@ registerTool(
     name: z.string().describe('Connector name'),
     configs: z.record(z.string(), z.string()).describe('Connector configuration'),
   },
+  WRITE_CREATE_HINTS,
   async (params: { cluster: string; connectId: string; name: string; configs: Record<string, string> }) => {
     const { cluster, connectId, name, configs } = params;
     const endpoint = parameterizeEndpoint('/api/{cluster}/connect/{connectId}/{name}/configs', { cluster, connectId, name });
@@ -720,6 +831,7 @@ registerTool(
     connectId: z.string().describe('Connect cluster ID'),
     name: z.string().describe('Connector name'),
   },
+  READ_ONLY_HINTS,
   async (params: { cluster: string; connectId: string; name: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/connect/{connectId}/{name}/pause', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -734,6 +846,7 @@ registerTool(
     connectId: z.string().describe('Connect cluster ID'),
     name: z.string().describe('Connector name'),
   },
+  READ_ONLY_HINTS,
   async (params: { cluster: string; connectId: string; name: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/connect/{connectId}/{name}/resume', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -748,6 +861,7 @@ registerTool(
     connectId: z.string().describe('Connect cluster ID'),
     name: z.string().describe('Connector name'),
   },
+  READ_ONLY_HINTS,
   async (params: { cluster: string; connectId: string; name: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/connect/{connectId}/{name}/restart', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -762,6 +876,7 @@ registerTool(
     connectId: z.string().describe('Connect cluster ID'),
     name: z.string().describe('Connector name'),
   },
+  READ_ONLY_HINTS,
   async (params: { cluster: string; connectId: string; name: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/connect/{connectId}/{name}/tasks', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -777,6 +892,7 @@ registerTool(
     name: z.string().describe('Connector name'),
     taskId: z.number().describe('Task ID'),
   },
+  READ_ONLY_HINTS,
   async (params: { cluster: string; connectId: string; name: string; taskId: number }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/connect/{connectId}/{name}/tasks/{taskId}/restart', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -790,6 +906,8 @@ registerTool(
     cluster: z.string().describe('Cluster name'),
     connectId: z.string().describe('Connect cluster ID'),
   },
+  READ_ONLY_HINTS,
+  
   async (params: { cluster: string; connectId: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/connect/{connectId}/plugins', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -805,6 +923,7 @@ registerTool(
     cluster: z.string().describe('Cluster name'),
     ksqldb: z.string().describe('ksqlDB cluster name'),
   },
+  READ_ONLY_HINTS,
   async (params: { cluster: string; ksqldb: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/ksqldb/{ksqldb}/info', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -818,6 +937,7 @@ registerTool(
     cluster: z.string().describe('Cluster name'),
     ksqldb: z.string().describe('ksqlDB cluster name'),
   },
+  READ_ONLY_HINTS,
   async (params: { cluster: string; ksqldb: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/ksqldb/{ksqldb}/queries', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -831,6 +951,7 @@ registerTool(
     cluster: z.string().describe('Cluster name'),
     ksqldb: z.string().describe('ksqlDB cluster name'),
   },
+  READ_ONLY_HINTS,
   async (params: { cluster: string; ksqldb: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/ksqldb/{ksqldb}/streams', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -844,6 +965,7 @@ registerTool(
     cluster: z.string().describe('Cluster name'),
     ksqldb: z.string().describe('ksqlDB cluster name'),
   },
+  READ_ONLY_HINTS,
   async (params: { cluster: string; ksqldb: string }) => {
     const endpoint = parameterizeEndpoint('/api/{cluster}/ksqldb/{ksqldb}/tables', params);
     return callApi(getEnvironment(), tokenStore, endpoint, 'GET');
@@ -859,6 +981,7 @@ registerTool(
     ksql: z.string().describe('The ksql statement to execute'),
     streamsProperties: z.record(z.string(), z.string()).optional().describe('Properties for the streams application'),
   },
+  WRITE_UPDATE_HINTS,
   async (params: { cluster: string; ksqldb: string; ksql: string; streamsProperties?: Record<string, string> }) => {
     const { cluster, ksqldb, ...body } = params;
     const endpoint = parameterizeEndpoint('/api/{cluster}/ksqldb/{ksqldb}/execute', { cluster, ksqldb });
@@ -874,6 +997,7 @@ registerTool(
     ksqldb: z.string().describe('ksqlDB cluster name'),
     sql: z.string().describe('The SQL query to execute'),
   },
+  WRITE_UPDATE_HINTS,
   async (params: { cluster: string; ksqldb: string; sql: string }) => {
     const { cluster, ksqldb, sql } = params;
     const endpoint = parameterizeEndpoint('/api/{cluster}/ksqldb/{ksqldb}/query', { cluster, ksqldb });

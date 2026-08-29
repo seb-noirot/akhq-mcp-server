@@ -15,7 +15,7 @@
     "build": "tsc && shx chmod +x dist/*.js",
     "start": "node dist/main.js",
     "dev": "tsc --watch",
-    "test": "echo \"No tests specified\" && exit 0"
+    "test": "node dist/validate-hints.js"
   },
   "keywords": [
     "kafka",
