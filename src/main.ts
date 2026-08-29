@@ -55,7 +55,8 @@ function registerTool<T extends Record<string, unknown>>(
 ): void {
   const wrappedHandler = async (params: Record<string, unknown>) => {
     try {
-      return await handler(params as T);
+      const validatedParams = z.object(parameters).parse(params);
+      return await handler(validatedParams as T);
     } catch (error) {
       if (error instanceof z.ZodError) {
         return {

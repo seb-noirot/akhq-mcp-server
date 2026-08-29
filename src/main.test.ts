@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { z } from 'zod';
 import { toolContracts } from './main.js';
 
 function getTool(name: string) {
@@ -31,8 +30,11 @@ test('successful invocation smoke test: list_environments', async () => {
   assert.equal(typeof payload[0].baseUrl, 'string');
 });
 
-test('input validation contract: set_environment rejects missing name', () => {
+test('input validation contract: set_environment rejects missing name', async () => {
   const tool = getTool('set_environment');
-  const parsed = z.object(tool.parameters).safeParse({});
-  assert.equal(parsed.success, false);
+  const result = await tool.invoke({});
+  const payload = JSON.parse(result.content[0].text);
+  assert.equal(payload.error, 'Validation error');
+  assert.equal(Array.isArray(payload.details), true);
+  assert.equal(payload.details[0]?.path[0], 'name');
 });
