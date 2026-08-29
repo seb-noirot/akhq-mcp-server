@@ -2,6 +2,9 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
+import { realpathSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { loadConfig } from './config.js';
 import { callApi, parameterizeEndpoint, type TokenStore } from './api.js';
@@ -37,6 +40,13 @@ const server = new McpServer({
 
 type ToolResult = { content: Array<{ type: 'text'; text: string }> };
 type Handler<T extends Record<string, unknown>> = (params: T) => Promise<ToolResult>;
+export type ToolContract = {
+  name: string;
+  parameters: Record<string, z.ZodTypeAny>;
+  annotations: ToolAnnotations;
+  invoke: (params: Record<string, unknown>) => Promise<ToolResult>;
+};
+export const toolContracts: ToolContract[] = [];
 
 function registerTool<T extends Record<string, unknown>>(
   name: string,
@@ -45,9 +55,11 @@ function registerTool<T extends Record<string, unknown>>(
   annotations: ToolAnnotations,
   handler: Handler<T>,
 ): void {
-  server.tool(name, description, parameters, annotations, async (params) => {
+  const schema = z.object(parameters).strict();
+  const wrappedHandler = async (params?: Record<string, unknown>) => {
     try {
-      return await handler(params as T);
+      const validatedParams = schema.parse(params ?? {});
+      return await handler(validatedParams as T);
     } catch (error) {
       if (error instanceof z.ZodError) {
         return {
@@ -57,7 +69,9 @@ function registerTool<T extends Record<string, unknown>>(
       const msg = error instanceof Error ? error.message : String(error);
       return { content: [{ type: 'text' as const, text: JSON.stringify({ error: msg }) }] };
     }
-  });
+  };
+  toolContracts.push({ name, parameters, annotations, invoke: wrappedHandler });
+  server.tool(name, description, parameters, annotations, wrappedHandler);
 }
 
 // ─── Reusable hint presets ────────────────────────────────────────────────────
@@ -1012,7 +1026,21 @@ async function main() {
   await server.connect(transport);
 }
 
-main().catch((err) => {
-  console.error('Fatal error:', err);
-  process.exit(1);
-});
+const isEntrypoint = (() => {
+  if (!process.argv[1]) {
+    return false;
+  }
+
+  try {
+    return realpathSync(resolve(process.cwd(), process.argv[1])) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+})();
+
+if (isEntrypoint) {
+  main().catch((err) => {
+    console.error('Fatal error:', err);
+    process.exit(1);
+  });
+}
