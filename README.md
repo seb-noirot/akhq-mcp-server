@@ -1,5 +1,7 @@
 # AKHQ MCP Server
 
+[![M8ven Score](https://m8ven.ai/badge/mcp/seb-noirot-akhq-mcp-server-121tuf?v=61965ad4b316f7e30df368b5c14e68b1)](https://m8ven.ai/mcp/seb-noirot-akhq-mcp-server-121tuf)
+
 An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server for [AKHQ](https://akhq.io) — the GUI for Apache Kafka.
 
 Enables AI assistants (Claude, Cursor, etc.) to interact with Kafka clusters through AKHQ's REST API.
