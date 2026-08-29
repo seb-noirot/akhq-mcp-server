@@ -2,6 +2,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
+import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
 import { loadConfig } from './config.js';
 import { callApi, parameterizeEndpoint, type TokenStore } from './api.js';
@@ -37,6 +38,13 @@ const server = new McpServer({
 
 type ToolResult = { content: Array<{ type: 'text'; text: string }> };
 type Handler<T extends Record<string, unknown>> = (params: T) => Promise<ToolResult>;
+export type ToolContract = {
+  name: string;
+  parameters: Record<string, z.ZodTypeAny>;
+  annotations: ToolAnnotations;
+  invoke: (params: Record<string, unknown>) => Promise<ToolResult>;
+};
+export const toolContracts: ToolContract[] = [];
 
 function registerTool<T extends Record<string, unknown>>(
   name: string,
@@ -45,7 +53,7 @@ function registerTool<T extends Record<string, unknown>>(
   annotations: ToolAnnotations,
   handler: Handler<T>,
 ): void {
-  server.tool(name, description, parameters, annotations, async (params) => {
+  const wrappedHandler = async (params: Record<string, unknown>) => {
     try {
       return await handler(params as T);
     } catch (error) {
@@ -57,7 +65,9 @@ function registerTool<T extends Record<string, unknown>>(
       const msg = error instanceof Error ? error.message : String(error);
       return { content: [{ type: 'text' as const, text: JSON.stringify({ error: msg }) }] };
     }
-  });
+  };
+  toolContracts.push({ name, parameters, annotations, invoke: wrappedHandler });
+  server.tool(name, description, parameters, annotations, wrappedHandler);
 }
 
 // ─── Reusable hint presets ────────────────────────────────────────────────────
@@ -1012,7 +1022,9 @@ async function main() {
   await server.connect(transport);
 }
 
-main().catch((err) => {
-  console.error('Fatal error:', err);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    console.error('Fatal error:', err);
+    process.exit(1);
+  });
+}
