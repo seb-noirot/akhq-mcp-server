@@ -2,8 +2,9 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
+import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { loadConfig } from './config.js';
 import { callApi, parameterizeEndpoint, type TokenStore } from './api.js';
@@ -1025,7 +1026,19 @@ async function main() {
   await server.connect(transport);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.cwd(), process.argv[1])).href) {
+const isEntrypoint = (() => {
+  if (!process.argv[1]) {
+    return false;
+  }
+
+  try {
+    return realpathSync(resolve(process.cwd(), process.argv[1])) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+})();
+
+if (isEntrypoint) {
   main().catch((err) => {
     console.error('Fatal error:', err);
     process.exit(1);
