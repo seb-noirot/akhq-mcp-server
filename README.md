@@ -128,8 +128,8 @@ Add to `.cursor/mcp.json` in your project or globally:
 {
   "mcpServers": {
     "akhq": {
-      "command": "npx",
-      "args": ["akhq-mcp-server"],
+      "command": "node",
+      "args": ["/absolute/path/to/akhq-mcp-server/dist/main.js"],
       "env": {
         "AKHQ_CONFIG_FILE": "/path/to/akhq-config.json"
       }
@@ -138,6 +138,8 @@ Add to `.cursor/mcp.json` in your project or globally:
 }
 ```
 
+When `AKHQ_CONFIG_FILE` defines multiple environments (for example `nonprod` and `prod` with different bearer tokens), switch targets with `set_environment` only. Do not use `set_base_url` to switch prod/nonprod.
+
 ## Available Tools
 
 ### Environment Management
@@ -145,8 +147,9 @@ Add to `.cursor/mcp.json` in your project or globally:
 | Tool | Description |
 |---|---|
 | `list_environments` | List all configured AKHQ environments |
-| `set_environment` | Switch the active AKHQ environment |
-| `get_current_environment` | Get the currently active environment |
+| `set_environment` | Switch the active AKHQ environment by name (`baseUrl + auth`) |
+| `get_current_environment` | Get the currently active environment (`name`, `baseUrl`, `authType`, `hasToken`) |
+| `set_base_url` | URL-only override for single-environment setups. In multi-environment configs, use `set_environment`. |
 
 ### General
 

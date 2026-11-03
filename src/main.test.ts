@@ -38,3 +38,21 @@ test('input validation contract: set_environment rejects missing name', async ()
   assert.equal(Array.isArray(payload.details), true);
   assert.equal(payload.details[0]?.path[0], 'name');
 });
+
+test('set_base_url is URL-only and updates the single active environment', async () => {
+  const getCurrentEnvironment = getTool('get_current_environment');
+  const setBaseUrl = getTool('set_base_url');
+
+  const before = JSON.parse((await getCurrentEnvironment.invoke({})).content[0].text);
+  const originalBaseUrl = before.baseUrl;
+  const updatedBaseUrl = 'http://127.0.0.1:18080';
+
+  const updateResult = JSON.parse((await setBaseUrl.invoke({ url: updatedBaseUrl })).content[0].text);
+  assert.equal(updateResult.success, true);
+  assert.equal(updateResult.baseUrl, updatedBaseUrl);
+
+  const after = JSON.parse((await getCurrentEnvironment.invoke({})).content[0].text);
+  assert.equal(after.baseUrl, updatedBaseUrl);
+
+  await setBaseUrl.invoke({ url: originalBaseUrl });
+});

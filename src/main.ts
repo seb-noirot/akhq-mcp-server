@@ -147,7 +147,7 @@ registerTool(
 
 registerTool(
   'set_environment',
-  'Switch the active AKHQ environment',
+  'Switch the active AKHQ environment (baseUrl + auth) by name',
   { name: z.string().describe('The environment name to switch to') },
   WRITE_IDEMPOTENT_LOCAL_HINTS,
   
@@ -163,7 +163,7 @@ registerTool(
 
 registerTool(
   'get_current_environment',
-  'Get the currently active AKHQ environment',
+  'Get the currently active AKHQ environment (name, baseUrl, auth status)',
   {},
   READ_ONLY_LOCAL_HINTS,
   
@@ -177,6 +177,41 @@ registerTool(
           baseUrl: env.baseUrl,
           authType: env.auth.type,
           hasToken: env.auth.type === 'bearer' ? tokenStore.has(env.name) : undefined,
+        }),
+      }],
+    };
+  },
+);
+
+registerTool(
+  'set_base_url',
+  'DEPRECATED for multi-environment use. URL-only override for single-environment setups.',
+  { url: z.string().url().describe('The AKHQ base URL to use') },
+  WRITE_IDEMPOTENT_LOCAL_HINTS,
+
+  async ({ url }: { url: string }) => {
+    if (config.environments.length > 1) {
+      return {
+        content: [{
+          type: 'text' as const,
+          text: JSON.stringify({
+            error: 'set_base_url is disabled when multiple environments are configured.',
+            action_required: 'Use set_environment with a configured environment name (for example "prod").',
+          }),
+        }],
+      };
+    }
+
+    const env = getEnvironment();
+    env.baseUrl = url;
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify({
+          success: true,
+          environment: env.name,
+          baseUrl: env.baseUrl,
+          message: 'URL updated for the active single environment. For prod/nonprod switching, use set_environment.',
         }),
       }],
     };
